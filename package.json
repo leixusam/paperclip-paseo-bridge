@@ -1,0 +1,24 @@
+{
+  "name": "paperclip-paseo-bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "ACP agent that lets Paseo chat with a Paperclip agent through Paperclip Agent Chat",
+  "license": "MIT",
+  "repository": "github:leixusam/paperclip-paseo-bridge",
+  "bin": {
+    "paperclip-paseo-bridge": "bridge.mjs"
+  },
+  "files": [
+    "bridge.mjs",
+    "config.mjs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "0.17.1"
+  }
+}
