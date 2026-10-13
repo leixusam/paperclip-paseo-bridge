@@ -126,6 +126,12 @@ export function createBridgeAgent(connection, options) {
       const runIds = new Set();
       const started = now();
       let failures = 0;
+      let wrote = false;
+      let noticeToCheck = false;
+      const write = async (text) => {
+        await say(sessionId, (wrote ? "\n\n" : "") + text);
+        wrote = true;
+      };
 
       async function streamNewReplies() {
         const comments = await api("GET", `/issues/${chat.id}/comments?afterCommentId=${lastSeen}&order=asc`);
@@ -133,8 +139,13 @@ export function createBridgeAgent(connection, options) {
           if (seen.has(comment.id)) continue;
           seen.add(comment.id);
           lastSeen = comment.id;
+          if (comment.authorType === "system") {
+            await write(`_(Paperclip: ${comment.body})_`);
+            noticeToCheck = true;
+            continue;
+          }
           if (comment.authorType !== "agent") continue;
-          await say(sessionId, (replies > 0 ? "\n\n" : "") + comment.body);
+          await write(comment.body);
           replies += 1;
           if (comment.createdByRunId) runIds.add(comment.createdByRunId);
         }
@@ -144,6 +155,15 @@ export function createBridgeAgent(connection, options) {
         if (abort.signal.aborted) return { stopReason: "cancelled" };
         try {
           await streamNewReplies();
+          // Paperclip can block the chat before the agent ever runs, e.g. for a missing credential.
+          if (noticeToCheck) {
+            noticeToCheck = false;
+            const issue = await api("GET", `/issues/${chat.id}`);
+            if (issue.status === "blocked") {
+              await write(`_(The chat is blocked in Paperclip; fix it there, then ask again. See ${chat.identifier ?? chat.id}.)_`);
+              return { stopReason: "end_turn" };
+            }
+          }
           if (runIds.size > 0) {
             const checked = runIds.size;
             const runs = await Promise.all([...runIds].map((id) => api("GET", `/heartbeat-runs/${id}`)));
@@ -153,7 +173,7 @@ export function createBridgeAgent(connection, options) {
               if (runIds.size === checked) {
                 const unsuccessful = runs.find((run) => run.status !== "succeeded");
                 if (unsuccessful) {
-                  await say(sessionId, `\n\n_(${agentRef} run ${unsuccessful.status.replace("_", " ")}; see ${chat.identifier ?? chat.id} in Paperclip.)_`);
+                  await write(`_(${agentRef} run ${unsuccessful.status.replace("_", " ")}; see ${chat.identifier ?? chat.id} in Paperclip.)_`);
                 }
                 return { stopReason: "end_turn" };
               }
@@ -166,10 +186,9 @@ export function createBridgeAgent(connection, options) {
         if (now() - started >= turnTimeoutMs) {
           const minutes = Math.round(turnTimeoutMs / 60000);
           const where = `Check ${chat.identifier ?? chat.id} in Paperclip or ask again later.`;
-          await say(
-            sessionId,
+          await write(
             replies > 0
-              ? `\n\n_(${agentRef}'s run is still running after ${minutes} min; later replies will not show here. ${where})_`
+              ? `_(${agentRef}'s run is still running after ${minutes} min; later replies will not show here. ${where})_`
               : `_(No reply yet after ${minutes} min; ${agentRef} may still be working. ${where})_`,
           );
           return { stopReason: "end_turn" };

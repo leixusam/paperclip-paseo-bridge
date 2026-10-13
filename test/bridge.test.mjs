@@ -48,6 +48,7 @@ async function startFakePaperclip(script, { onRunStatus = () => {}, failCommentP
       const index = after ? state.comments.findIndex((c) => c.id === after) : 0;
       return send(200, state.comments.slice(Math.max(index, 0)));
     }
+    if (url.pathname === "/api/issues/issue-1" && req.method === "GET") return send(200, { ...state.chat, status: state.chatStatus ?? "in_progress" });
     const runMatch = url.pathname.match(/^\/api\/heartbeat-runs\/(.+)$/);
     if (runMatch) onRunStatus(runMatch[1], state);
     if (runMatch) return send(200, { id: runMatch[1], status: state.runs.get(runMatch[1]) ?? "running" });
@@ -175,6 +176,36 @@ test("says the run is still going when a reply arrived but the run outlasts the 
   const all = text(updates).join("");
   assert.match(all, /still running after/i);
   assert.doesNotMatch(all, /no reply yet/i);
+});
+
+test("shows Paperclip's notice and ends the turn when Paperclip blocks the chat before the agent runs", async () => {
+  const api = await startFakePaperclip((tick, state) => {
+    if (tick === 2) {
+      state.comments.push({ id: `c${state.comments.length + 1}`, authorType: "system", body: "Paperclip stopped before dispatching the adapter." });
+      state.chatStatus = "blocked";
+    }
+  });
+  const { client, sessionId, updates } = await connect({ apiBase: api.apiBase, token: TOKEN, companyRef: COMPANY, agentRef: "chief-of-staff", sleep: noSleep, turnTimeoutMs: 60_000 });
+  const result = await client.prompt({ sessionId, prompt: [{ type: "text", text: "hi" }] });
+  api.close();
+  assert.equal(result.stopReason, "end_turn");
+  const all = text(updates).join("");
+  assert.match(all, /Paperclip stopped before dispatching the adapter/);
+  assert.match(all, /blocked/i);
+  assert.ok(api.state.polls < 5, "must not wait for the timeout");
+});
+
+test("a Paperclip notice on a chat that is not blocked keeps the turn open for the agent's reply", async () => {
+  const api = await startFakePaperclip((tick, state) => {
+    if (tick === 1) state.comments.push({ id: `c${state.comments.length + 1}`, authorType: "system", body: "Queued behind another run." });
+    if (tick === 3) { agentReply(state, "Here now.", "run-8"); state.runs.set("run-8", "succeeded"); }
+  });
+  const { client, sessionId, updates } = await connect({ apiBase: api.apiBase, token: TOKEN, companyRef: COMPANY, agentRef: "chief-of-staff", sleep: noSleep, turnTimeoutMs: 60_000 });
+  await client.prompt({ sessionId, prompt: [{ type: "text", text: "hi" }] });
+  api.close();
+  const all = text(updates).join("");
+  assert.match(all, /Queued behind another run/);
+  assert.match(all, /Here now\./);
 });
 
 test("reports a failed run instead of waiting forever", async () => {
